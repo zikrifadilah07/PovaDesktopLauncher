@@ -10,6 +10,8 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.text.format.DateFormat;
+import java.util.Date;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
 import android.os.Bundle;
@@ -36,8 +38,8 @@ public class MainActivity extends Activity {
     private DisplayManager displayManager;
     private Presentation externalPresentation;
     private Desktop surface;
-    private static final int BLUE = Color.rgb(15, 33, 61);
-    private static final int PANEL = Color.rgb(24, 45, 79);
+    private static final int BLUE = Color.rgb(13, 27, 53);
+    private static final int PANEL = Color.rgb(35, 57, 92);
     private static final int WHITE = Color.WHITE;
 
     @Override public void onCreate(Bundle b) {
@@ -113,38 +115,44 @@ public class MainActivity extends Activity {
         final int displayId;
         int count = 0;
         TextView monitorStatus;
+        final java.util.Map<View, TextView> restoreButtons = new java.util.HashMap<>();
         Desktop(Context c, int id) {
             displayId = id;
             root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                    new int[]{Color.rgb(8, 22, 43), Color.rgb(28, 67, 112)}));
+                    new int[]{Color.rgb(10, 24, 53), Color.rgb(23, 80, 121)}));
             root.addView(desktop, new FrameLayout.LayoutParams(-1,-1));
             LinearLayout shortcuts = new LinearLayout(MainActivity.this);
             shortcuts.setOrientation(LinearLayout.VERTICAL);
-            shortcuts.setPadding(dp(14), dp(32), 0, 0);
-            addShortcut(shortcuts, "Files", () -> openWindow("Files", "Gunakan menu Aplikasi untuk membuka file manager sistem."));
+            shortcuts.setPadding(dp(14), dp(28), 0, 0);
+            addShortcut(shortcuts, "Files", () -> launchPackage("com.google.android.documentsui", "File Manager"));
             addShortcut(shortcuts, "Notes", () -> openWindow("Notes", ""));
-            addShortcut(shortcuts, "Browser", () -> openBrowser());
-            addShortcut(shortcuts, "Aplikasi", () -> openApps());
+            addShortcut(shortcuts, "Chrome", () -> launchPackage("com.android.chrome", "Chrome"));
+            addShortcut(shortcuts, "Apps", () -> openApps());
+            addShortcut(shortcuts, "About", () -> openWindow("Pova Desktop v0.2", "Mode landscape otomatis.\n\nJendela internal bisa digeser dan diperbesar.\n\nAplikasi lain dicoba dengan launch bounds, tetapi HiOS dapat membuka fullscreen.\n\nMode freeform yang berhasil dengan ADB tidak otomatis memberi izin yang sama kepada aplikasi Android biasa."));
             FrameLayout.LayoutParams sc = new FrameLayout.LayoutParams(dp(116),-2,Gravity.TOP|Gravity.LEFT);
             desktop.addView(shortcuts, sc);
             bar.setGravity(Gravity.CENTER_VERTICAL);
             bar.setPadding(dp(8),dp(5),dp(8),dp(5));
-            bar.setBackgroundColor(Color.rgb(10,20,39));
-            TextView start = button("START", () -> openApps());
-            bar.addView(start, new LinearLayout.LayoutParams(dp(80),-1));
+            bar.setBackgroundColor(Color.rgb(12,26,50));
+            TextView start = button("⊞  Start", () -> openApps());
+            bar.addView(start, new LinearLayout.LayoutParams(dp(108),-1));
+            TextView chrome = button("Chrome", () -> launchPackage("com.android.chrome", "Chrome"));
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(dp(93),-1); cp.leftMargin=dp(6); bar.addView(chrome,cp);
+            TextView whatsapp = button("WhatsApp", () -> launchPackage("com.whatsapp", "WhatsApp"));
+            LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(dp(105),-1); wp.leftMargin=dp(6); bar.addView(whatsapp,wp);
             TextView notes = button("Notes", () -> openWindow("Notes", ""));
             LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(dp(80),-1); np.leftMargin=dp(6); bar.addView(notes,np);
             TextView browser = button("Web", () -> openBrowser());
             LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(65),-1); bp.leftMargin=dp(6); bar.addView(browser,bp);
-            monitorStatus = text("Layar HP", 11, false);
+            monitorStatus = text("Desktop • v0.2", 11, false);
             monitorStatus.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);
             bar.addView(monitorStatus,new LinearLayout.LayoutParams(0,-1,1));
             FrameLayout.LayoutParams task = new FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM);
             root.addView(bar,task);
-            root.post(() -> openWindow("Selamat datang", "Pova Desktop v0.1\n\nJendela internal bisa digeser melalui judul dan diubah ukurannya melalui sudut kanan bawah.\n\nSTART membuka aplikasi yang terpasang. Mode floating aplikasi eksternal bergantung pada HiOS.\n\nMonitor eksternal membutuhkan display yang dikenali Android, bukan hanya kabel atau screen mirroring."));
+            root.post(() -> openWindow("Welcome to Pova Desktop", "Pova Desktop v0.2 • Landscape\n\nSTART: tampilkan daftar aplikasi.\nChrome / WhatsApp: coba jalankan dalam jendela kecil.\nNotes: contoh jendela yang bisa digeser dan diubah ukurannya.\n\nPENTING: Dukungan floating dari ADB tidak menjamin aplikasi launcher mendapat hak windowingMode 5. Jika Chrome atau WhatsApp tampil fullscreen, itu batasan sistem HiOS, bukan kegagalan instalasi.\n\nMonitor eksternal memerlukan display yang dikenali Android."));
         }
         void updateMonitorStatus(boolean attached) {
-            if (monitorStatus != null) monitorStatus.setText(attached ? "Monitor terhubung" : "Layar HP");
+            if (monitorStatus != null) monitorStatus.setText(attached ? "External display • v0.2" : "Desktop • v0.2");
         }
         void addShortcut(LinearLayout parent, String title, Runnable run) {
             TextView t = button(title, run);
@@ -185,6 +193,22 @@ public class MainActivity extends Activity {
             }
             scroll.addView(list); createWindow("Aplikasi terpasang (" + items.size() + ")",scroll);
         }
+        void launchPackage(String pkg, String label) {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(pkg);
+            if (launch == null) {
+                Toast.makeText(MainActivity.this, label + " belum tersedia atau tidak dapat dibuka", Toast.LENGTH_LONG).show();
+                return;
+            }
+            try {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ActivityOptions options = ActivityOptions.makeBasic();
+                if (displayId != Display.DEFAULT_DISPLAY) options.setLaunchDisplayId(displayId);
+                options.setLaunchBounds(new Rect(dp(90), dp(70), dp(650), dp(450)));
+                startActivity(launch, options.toBundle());
+            } catch (Exception e) {
+                Toast.makeText(MainActivity.this, "Gagal membuka " + label + ": " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
         void launchApp(ResolveInfo app) {
             try {
                 Intent i = new Intent(Intent.ACTION_MAIN);
@@ -209,9 +233,9 @@ public class MainActivity extends Activity {
             LinearLayout header = new LinearLayout(MainActivity.this);header.setGravity(Gravity.CENTER_VERTICAL);
             header.setBackground(bg(PANEL,10));
             TextView name = text(title, 15,true); header.addView(name,new LinearLayout.LayoutParams(0,dp(46),1));
-            TextView hide = button("_", () -> window.setVisibility(View.GONE));
+            TextView hide = button("_", () -> { window.setVisibility(View.GONE); TextView restore = button("Restore " + title, () -> { window.setVisibility(View.VISIBLE); window.bringToFront(); bar.removeView(restoreButtons.get(window)); restoreButtons.remove(window); }); restoreButtons.put(window, restore); bar.addView(restore, new LinearLayout.LayoutParams(dp(115), -1)); });
             header.addView(hide,new LinearLayout.LayoutParams(dp(38),dp(40)));
-            TextView close = button("X", () -> desktop.removeView(window));
+            TextView close = button("X", () -> { desktop.removeView(window); TextView rb = restoreButtons.remove(window); if(rb != null) bar.removeView(rb); });
             header.addView(close,new LinearLayout.LayoutParams(dp(38),dp(40)));
             window.addView(header,new LinearLayout.LayoutParams(-1,dp(46)));
             window.addView(content,new LinearLayout.LayoutParams(-1,0,1));
