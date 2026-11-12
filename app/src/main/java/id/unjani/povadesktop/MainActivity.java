@@ -15,6 +15,11 @@ import java.util.Date;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
 import android.os.Bundle;
+import android.os.IBinder;
+import android.os.Parcel;
+import android.content.ComponentName;
+import android.content.ServiceConnection;
+import rikka.shizuku.Shizuku;
 import android.os.Build;
 import android.view.Display;
 import android.view.Gravity;
@@ -42,8 +47,105 @@ public class MainActivity extends Activity {
     private static final int PANEL = Color.rgb(35, 57, 92);
     private static final int WHITE = Color.WHITE;
 
+    private static final int SHIZUKU_REQUEST_CODE = 1001;
+    private IBinder freeformService;
+    private boolean bindingShizuku = false;
+    private String pendingComponent;
+    private final Shizuku.OnRequestPermissionResultListener permissionListener = (requestCode, grantResult) -> {
+        if (requestCode != SHIZUKU_REQUEST_CODE) return;
+        runOnUiThread(() -> {
+            if (grantResult == PackageManager.PERMISSION_GRANTED) bindFreeformService();
+            else Toast.makeText(this, "Izin Shizuku ditolak. Freeform tidak dijalankan.", Toast.LENGTH_LONG).show();
+        });
+    };
+    private final ServiceConnection freeformConnection = new ServiceConnection() {
+        @Override public void onServiceConnected(ComponentName name, IBinder service) {
+            bindingShizuku = false;
+            freeformService = service;
+            runOnUiThread(() -> {
+                Toast.makeText(MainActivity.this, "Shizuku siap untuk Freeform", Toast.LENGTH_SHORT).show();
+                if (pendingComponent != null) {
+                    String component = pendingComponent;
+                    pendingComponent = null;
+                    launchThroughShizuku(component);
+                }
+            });
+        }
+        @Override public void onServiceDisconnected(ComponentName name) {
+            freeformService = null;
+            bindingShizuku = false;
+        }
+    };
+    private Shizuku.UserServiceArgs serviceArgs() {
+        return new Shizuku.UserServiceArgs(new ComponentName(this, FloatingUserService.class))
+            .processNameSuffix("freeform").daemon(false).version(1);
+    }
+    private void ensureShizuku() {
+        try {
+            if (!Shizuku.pingBinder()) {
+                Toast.makeText(this, "Jalankan Shizuku terlebih dahulu.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                Shizuku.requestPermission(SHIZUKU_REQUEST_CODE);
+                return;
+            }
+            bindFreeformService();
+        } catch (Exception e) {
+            Toast.makeText(this, "Shizuku belum siap: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+    private void bindFreeformService() {
+        if (freeformService != null && freeformService.isBinderAlive()) {
+            Toast.makeText(this, "Shizuku sudah terhubung", Toast.LENGTH_SHORT).show();
+            if (pendingComponent != null) {
+                String c = pendingComponent; pendingComponent = null; launchThroughShizuku(c);
+            }
+            return;
+        }
+        if (bindingShizuku) return;
+        try {
+            bindingShizuku = true;
+            Shizuku.bindUserService(serviceArgs(), freeformConnection);
+        } catch (Exception e) {
+            bindingShizuku = false;
+            Toast.makeText(this, "Gagal menghubungkan Shizuku: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+    private void openFreeform(String component) {
+        pendingComponent = component;
+        ensureShizuku();
+    }
+    private void launchThroughShizuku(String component) {
+        IBinder service = freeformService;
+        if (service == null || !service.isBinderAlive()) {
+            pendingComponent = component;
+            ensureShizuku();
+            return;
+        }
+        new Thread(() -> {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeString(component);
+                boolean received = service.transact(FloatingUserService.CODE_LAUNCH, data, reply, 0);
+                if (!received) throw new IllegalStateException("UserService tidak menerima perintah");
+                reply.readException();
+                int exit = reply.readInt();
+                String output = reply.readString();
+                runOnUiThread(() -> Toast.makeText(this,
+                    exit == 0 ? "Freeform dijalankan: " + component : "Freeform gagal (" + exit + "): " + output,
+                    Toast.LENGTH_LONG).show());
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "Kesalahan Shizuku: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            } finally {
+                data.recycle(); reply.recycle();
+            }
+        }, "launch-freeform").start();
+    }
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
+        Shizuku.addRequestPermissionResultListener(permissionListener);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         surface = new Desktop(this, Display.DEFAULT_DISPLAY);
         setContentView(surface.root);
@@ -52,6 +154,10 @@ public class MainActivity extends Activity {
         refreshExternal();
     }
     @Override protected void onDestroy() {
+        Shizuku.removeRequestPermissionResultListener(permissionListener);
+        if (bindingShizuku || freeformService != null) {
+            try { Shizuku.unbindUserService(serviceArgs(), freeformConnection, false); } catch (Exception ignored) { }
+        }
         displayManager.unregisterDisplayListener(listener);
         closeExternal();
         super.onDestroy();
@@ -127,6 +233,7 @@ public class MainActivity extends Activity {
             addShortcut(shortcuts, "Files", () -> launchPackage("com.google.android.documentsui", "File Manager"));
             addShortcut(shortcuts, "Notes", () -> openWindow("Notes", ""));
             addShortcut(shortcuts, "Chrome", () -> launchPackage("com.android.chrome", "Chrome"));
+            addShortcut(shortcuts, "Shizuku", () -> ensureShizuku());
             addShortcut(shortcuts, "Apps", () -> openApps());
             addShortcut(shortcuts, "About", () -> openWindow("Pova Desktop v0.2", "Mode landscape otomatis.\n\nJendela internal bisa digeser dan diperbesar.\n\nAplikasi lain dicoba dengan launch bounds, tetapi HiOS dapat membuka fullscreen.\n\nMode freeform yang berhasil dengan ADB tidak otomatis memberi izin yang sama kepada aplikasi Android biasa."));
             FrameLayout.LayoutParams sc = new FrameLayout.LayoutParams(dp(116),-2,Gravity.TOP|Gravity.LEFT);
@@ -195,34 +302,15 @@ public class MainActivity extends Activity {
         }
         void launchPackage(String pkg, String label) {
             Intent launch = getPackageManager().getLaunchIntentForPackage(pkg);
-            if (launch == null) {
-                Toast.makeText(MainActivity.this, label + " belum tersedia atau tidak dapat dibuka", Toast.LENGTH_LONG).show();
+            if (launch == null || launch.getComponent() == null) {
+                Toast.makeText(MainActivity.this, label + " tidak tersedia", Toast.LENGTH_LONG).show();
                 return;
             }
-            try {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                ActivityOptions options = ActivityOptions.makeBasic();
-                if (displayId != Display.DEFAULT_DISPLAY) options.setLaunchDisplayId(displayId);
-                options.setLaunchBounds(new Rect(dp(90), dp(70), dp(650), dp(450)));
-                startActivity(launch, options.toBundle());
-            } catch (Exception e) {
-                Toast.makeText(MainActivity.this, "Gagal membuka " + label + ": " + e.getMessage(), Toast.LENGTH_LONG).show();
-            }
+            openFreeform(launch.getComponent().flattenToString());
         }
         void launchApp(ResolveInfo app) {
-            try {
-                Intent i = new Intent(Intent.ACTION_MAIN);
-                i.addCategory(Intent.CATEGORY_LAUNCHER);
-                i.setClassName(app.activityInfo.packageName,app.activityInfo.name);
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                ActivityOptions options = ActivityOptions.makeBasic();
-                if (displayId != Display.DEFAULT_DISPLAY) options.setLaunchDisplayId(displayId);
-                Rect r = new Rect(dp(70),dp(80),dp(540),dp(590));
-                options.setLaunchBounds(r);
-                startActivity(i,options.toBundle());
-            } catch (Exception e) {
-                Toast.makeText(MainActivity.this,"Tidak dapat membuka aplikasi: " + e.getMessage(),Toast.LENGTH_LONG).show();
-            }
+            if (app.activityInfo == null) return;
+            openFreeform(new ComponentName(app.activityInfo.packageName, app.activityInfo.name).flattenToString());
         }
         void createWindow(String title, View content) {
             int w = Math.max(dp(250), Math.min(dp(440), root.getWidth()-dp(32)));
